@@ -142,8 +142,12 @@ class ScenarioStore:
                 pass
 
     def _persist_custom(self) -> None:
-        CUSTOM_PATH.write_text(
-            json.dumps([s.model_dump(mode="json") for s in self._custom.values()], indent=2))
+        try:
+            CUSTOM_PATH.write_text(
+                json.dumps([s.model_dump(mode="json") for s in self._custom.values()], indent=2))
+        except OSError:
+            # Serverless/read-only filesystems: custom scenarios stay in-process.
+            pass
 
     def all(self) -> List[Scenario]:
         with self._lock:

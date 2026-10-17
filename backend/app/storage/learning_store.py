@@ -34,7 +34,11 @@ class LearningStore:
         return []
 
     def _save(self) -> None:
-        self.path.write_text(json.dumps({"deliveries": self.deliveries, "version": 1}, indent=2))
+        try:
+            self.path.write_text(json.dumps({"deliveries": self.deliveries, "version": 1}, indent=2))
+        except OSError:
+            # Serverless/read-only filesystems (e.g. Vercel): memory stays in-process.
+            pass
 
     def reset(self, mode: str = "empty") -> Dict[str, Any]:
         with self._lock:

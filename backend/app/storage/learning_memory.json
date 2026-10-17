@@ -1,4 +1,32 @@
 {
-  "deliveries": [],
+  "deliveries": [
+    {
+      "route_id": "A",
+      "traffic": "light",
+      "weather": "clear",
+      "eta_min": 15.0,
+      "actual_min": 15.0,
+      "on_time": true,
+      "seq": 1
+    },
+    {
+      "route_id": "B",
+      "traffic": "light",
+      "weather": "clear",
+      "eta_min": 20.0,
+      "actual_min": 20.0,
+      "on_time": true,
+      "seq": 2
+    },
+    {
+      "route_id": "B",
+      "traffic": "light",
+      "weather": "rain",
+      "eta_min": 23.0,
+      "actual_min": 24.5,
+      "on_time": true,
+      "seq": 3
+    }
+  ],
   "version": 1
 }
