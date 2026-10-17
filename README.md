@@ -52,6 +52,7 @@ Deploy this GitHub repository as two Vercel projects. In both projects, select t
 - Root Directory: `backend`
 - Framework preset: **Other** (Vercel detects the Python ASGI app from `main.py`)
 - Python version: `3.12` (matches `backend/.python-version`)
+- The backend's `vercel.json` routes all requests to the FastAPI application and selects Vercel's Python runtime.
 - Environment variable: `CORS_ORIGINS` = the frontend production origin, for example `https://your-frontend.vercel.app` (comma-separated origins are supported)
 - After deployment, verify `https://your-backend.vercel.app/api/health` and `https://your-backend.vercel.app/docs`.
 
@@ -61,6 +62,7 @@ Deploy this GitHub repository as two Vercel projects. In both projects, select t
 - Framework preset: **Vite**
 - Build command: `npm run build`
 - Output directory: `dist`
+- `frontend/vercel.json` sets these Vite build settings explicitly.
 - Environment variable: `VITE_API_URL` = the backend origin, for example `https://your-backend.vercel.app` (no trailing path)
 
 Set the frontend environment variable before building, then redeploy the frontend. If you use Vercel preview deployments, add their exact origins to the backend's `CORS_ORIGINS` value as well.
