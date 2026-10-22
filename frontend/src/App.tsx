@@ -1,117 +1,1422 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Activity, ArrowDownRight, ArrowRight, Check, ChevronDown, Clock3, Compass, Database, Gauge, GitBranch, Layers3, MapPin, Play, Plus, RotateCcw, Route as RouteIcon, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, Truck, Zap } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import confetti from 'canvas-confetti';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowRight,
+  Brain,
+  Check,
+  ChevronDown,
+  Clock3,
+  CloudRain,
+  Compass,
+  Database,
+  Eye,
+  Gauge,
+  GitBranch,
+  HelpCircle,
+  Layers,
+  Layers3,
+  MapPin,
+  Pause,
+  Play,
+  RotateCcw,
+  Route as RouteIcon,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Sun,
+  Truck,
+  Zap,
+} from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AgentBrain3D } from './components/AgentBrain3D';
+import { BehaviorMatrix } from './components/BehaviorMatrix';
+import { CityScene3D } from './components/CityScene3D';
+import { CustomDataEditor } from './components/CustomDataEditor';
+import { AGENT_PERSONAS, ExplainableJourney } from './components/ExplainableJourney';
 import { api } from './services/api';
-import type { AgentDecision, AgentInfo, Architecture, BatchResult, DiagnosticReport, LearningMemoryState, Scenario, TraceStep } from './types';
+import type {
+  AgentDecision,
+  AgentInfo,
+  Architecture,
+  BatchResult,
+  DiagnosticReport,
+  LearningMemoryState,
+  Scenario,
+  TraceStep,
+} from './types';
 
-type View = 'overview' | 'input' | 'architectures' | 'comparison' | 'diagnostics';
+type View = 'overview' | 'input' | 'architectures' | 'behavior' | 'comparison' | 'diagnostics';
+
 const fallbackAgents: AgentInfo[] = [
-  ['simple_reflex','Simple Reflex','Responds to current percepts','#fb923c'],['model_based','Model Based','Maintains an internal world state','#a78bfa'],['goal_based','Goal Based','Plans toward a delivery deadline','#34d399'],['utility_based','Utility Based','Balances time, cost and reliability','#38bdf8'],['learning','Learning','Improves from simulated outcomes','#f472b6'],['hierarchical','Hierarchical','Executes delivery in six tasks','#fbbf24'],['contextual','Contextual','Adapts to changing conditions','#22d3ee'],
-].map(([id,name,tagline,color])=>({id,name,tagline,description:tagline,color,strengths:[],weaknesses:[]}));
+  ['simple_reflex', 'Simple Reflex', 'Responds to current percepts with fixed IF-THEN rules', '#f97316'],
+  ['model_based', 'Model Based', 'Maintains an internal world state and congestion history', '#a78bfa'],
+  ['goal_based', 'Goal Based', 'Rejects late routes and plans toward the delivery deadline', '#10b981'],
+  ['utility_based', 'Utility Based', 'Balances travel time, cost, and route reliability', '#38bdf8'],
+  ['learning', 'Learning Agent', 'Improves travel time estimates from simulated past outcomes', '#f472b6'],
+  ['hierarchical', 'Hierarchical', 'Decomposes delivery into six structured operational tasks', '#fbbf24'],
+  ['contextual', 'Contextual', 'Adapts dynamically to rain friction, surges, and urgency', '#22d3ee'],
+].map(([id, name, tagline, color]) => ({
+  id,
+  name,
+  tagline,
+  description: tagline,
+  color,
+  strengths: [],
+  weaknesses: [],
+}));
 
 function App() {
-  const [view,setView]=useState<View>('overview');
-  const [agents,setAgents]=useState<AgentInfo[]>(fallbackAgents);
-  const [scenarios,setScenarios]=useState<Scenario[]>([]);
-  const [agentId,setAgentId]=useState('utility_based');
-  const [scenarioId,setScenarioId]=useState('s1-normal');
-  const [architecture,setArchitecture]=useState<Architecture|null>(null);
-  const [decision,setDecision]=useState<AgentDecision|null>(null);
-  const [batch,setBatch]=useState<BatchResult|null>(null);
-  const [diagnostics,setDiagnostics]=useState<DiagnosticReport|null>(null);
-  const [memory,setMemory]=useState<LearningMemoryState|null>(null);
-  const [step,setStep]=useState(0);
-  const [busy,setBusy]=useState(false);
-  const [error,setError]=useState('');
-  const [connected,setConnected]=useState(false);
-  const [draft,setDraft]=useState<Scenario|null>(null);
-  const [compareScope,setCompareScope]=useState<'current'|'suite'>('suite');
+  const [view, setView] = useState<View>('overview');
+  const [agents, setAgents] = useState<AgentInfo[]>(fallbackAgents);
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [agentId, setAgentId] = useState('utility_based');
+  const [scenarioId, setScenarioId] = useState('s1-normal');
+  const [architecture, setArchitecture] = useState<Architecture | null>(null);
+  const [decision, setDecision] = useState<AgentDecision | null>(null);
+  const [batch, setBatch] = useState<BatchResult | null>(null);
+  const [currentScenarioDecisions, setCurrentScenarioDecisions] = useState<AgentDecision[]>([]);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticReport | null>(null);
+  const [memory, setMemory] = useState<LearningMemoryState | null>(null);
+  const [step, setStep] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [connected, setConnected] = useState(false);
+  const [draft, setDraft] = useState<Scenario | null>(null);
+  const [compareScope, setCompareScope] = useState<'current' | 'suite'>('current');
 
-  const activeAgent=agents.find(a=>a.id===agentId)??fallbackAgents[3];
-  const activeScenario=scenarios.find(s=>s.id===scenarioId);
-  const liveTrace=decision?.reasoning??[];
-  const currentStep=liveTrace[Math.min(step,Math.max(0,liveTrace.length-1))];
-  const chartData=useMemo(()=>batch?.records.map((r,i)=>({label:`${r.agent_name.split(' ')[0]} · ${r.scenario_name.match(/Scenario (\d)/)?.[1]??i}`,eta:r.eta_min??0,deadline:r.deadline_min,agent:r.agent_name,route:r.selected_route_id}))??[],[batch]);
+  // 3D Visualizer & Playback States
+  const [visualizerMode, setVisualizerMode] = useState<'city' | 'brain' | 'diagram'>('city');
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const playTimerRef = useRef<number | null>(null);
 
-  useEffect(()=>{ api.health().then(()=>setConnected(true)).catch(()=>setConnected(false)); api.agents().then(setAgents).catch(()=>{}); api.scenarios().then(items=>{setScenarios(items); if(items[0])setScenarioId(items[0].id)}).catch(e=>setError(`Backend unavailable: ${e.message}`)); api.learningMemory().then(setMemory).catch(()=>{}); },[]);
-  useEffect(()=>{ api.architecture(agentId).then(setArchitecture).catch(()=>setArchitecture(null)); setStep(0); },[agentId]);
+  const activeAgent = agents.find((a) => a.id === agentId) ?? fallbackAgents[3];
+  const activeScenario = scenarios.find((s) => s.id === scenarioId) ?? scenarios[0] ?? null;
+  const liveTrace = decision?.reasoning ?? [];
+  const currentStep = liveTrace[Math.min(step, Math.max(0, liveTrace.length - 1))];
 
-  async function runOne(){setBusy(true);setError('');try{const r=await api.simulateAgent(agentId,scenarioId);setDecision(r);setStep(0);api.learningMemory().then(setMemory).catch(()=>{});}catch(e){setError(String(e));}finally{setBusy(false)}}
-  async function runBatch(){setBusy(true);setError('');try{const r=await api.simulateBatch();setBatch(r);setCompareScope('suite');setView('comparison');api.learningMemory().then(setMemory).catch(()=>{});}catch(e){setError(String(e));}finally{setBusy(false)}}
-  async function compareCurrent(){if(!activeScenario)return;setBusy(true);setError('');try{const r=await api.simulateAll(scenarioId);setBatch({count:r.results.length,records:r.results,scenarios:[r.scenario],summary:{per_scenario:{},per_agent:{}}});setCompareScope('current');setView('comparison');api.learningMemory().then(setMemory).catch(()=>{});}catch(e){setError(String(e));}finally{setBusy(false)}}
-  async function runDiagnostics(){setBusy(true);try{setDiagnostics(await api.runDiagnostics())}catch(e){setError(String(e))}finally{setBusy(false)}}
-  function animateTrace(){setStep(0);let n=0;const timer=window.setInterval(()=>{n++;setStep(n);if(n>=liveTrace.length)window.clearInterval(timer)},720)}
-  async function validateAndSave(){if(!draft)return;setError('');try{const checked=await api.validateScenario(draft);if(!checked.valid){setError(checked.errors.join(' · '));return;}await api.createScenario({...draft,id:undefined,custom:true});const list=await api.scenarios();setScenarios(list);const added=[...list].reverse().find(s=>s.custom&&s.name===draft.name);if(added){setScenarioId(added.id);setDraft(added);}}catch(e){setError(String(e))}}
-  async function runDraftAgent(){if(!draft)return;setBusy(true);setError('');try{if(!await validateDraft())return;const result=await api.simulateAgent(agentId,undefined,{...draft,id:draft.id||'user-input'});setDecision(result);setScenarioId(draft.id);setStep(0);api.learningMemory().then(setMemory).catch(()=>{});}catch(e){setError(String(e))}finally{setBusy(false)}}
-  async function validateDraft(){if(!draft)return false;const result=await api.validateScenario(draft);if(!result.valid){setError(result.errors.join(' · '));return false;}return true}
-  async function compareDraft(){if(!draft)return;setBusy(true);setError('');try{if(!await validateDraft())return;const result=await api.simulateAll(undefined,{...draft,id:draft.id||'user-input'});setBatch({count:result.results.length,records:result.results,scenarios:[result.scenario],summary:{per_scenario:{},per_agent:{}}});setCompareScope('current');setView('comparison');api.learningMemory().then(setMemory).catch(()=>{});}catch(e){setError(String(e))}finally{setBusy(false)}}
+  // Calculate 0..100 progress for 3D vehicle along route
+  const progressPercent = useMemo(() => {
+    if (!decision) return 0;
+    if (liveTrace.length <= 1) return 100;
+    return Math.round((Math.min(step, liveTrace.length - 1) / (liveTrace.length - 1)) * 100);
+  }, [step, liveTrace.length, decision]);
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><Truck size={20}/></div><div><b>dispatch<span>lab</span></b><small>AGENT SIMULATOR</small></div></div>
-      <div className="workspace"><div className="workspace-icon">S</div><div><b>Smart Food Delivery</b><small>UCP · Agent architectures</small></div></div>
-      <div className="nav-label">WORKSPACE</div>
-      <nav>{([['overview','Overview',Gauge],['input','Input data',SlidersHorizontal],['architectures','Agent architectures',GitBranch],['comparison','Compare agents',Layers3],['diagnostics','Diagnostics',ShieldCheck]] as const).map(([id,label,Icon])=><button key={id} className={`nav-item ${view===id?'selected':''}`} onClick={()=>{if(id==='input'&&!draft&&activeScenario)setDraft(structuredClone(activeScenario));setView(id)}}><Icon size={17}/><span>{label}</span>{id==='comparison'&&batch&&<i>{batch.count}</i>}</button>)}</nav>
-      <div className="nav-label agents-label">THE SEVEN AGENTS <button title="Agent models" onClick={()=>setView('architectures')}><ArrowRight size={13}/></button></div>
-      <div className="agent-menu">{agents.map(a=><button className={a.id===agentId?'active':''} onClick={()=>{setAgentId(a.id);setView('architectures')}} key={a.id}><span className="agent-dot" style={{background:a.color}}/><span>{a.name}</span>{a.id===agentId&&<span className="tiny-arrow">↗</span>}</button>)}</div>
-      <div className="sidebar-bottom"><div className="memory-card"><div className="memory-top"><span><Database size={14}/> LEARNING MEMORY</span><span className="live-dot"/></div><b>{memory?.deliveries.length??0} <small>simulated deliveries</small></b><div className="memory-meter"><i style={{width:`${Math.min(100,(memory?.deliveries.length??0)*8)}%`}}/></div><button onClick={async()=>{const m=await api.resetLearning('empty');setMemory(m);setDecision(null)}}><RotateCcw size={12}/> Clear experience</button></div></div>
-    </aside>
+  const chartData = useMemo(
+    () =>
+      batch?.records.map((r, i) => ({
+        label: `${r.agent_name.split(' ')[0]} · ${r.scenario_name.match(/Scenario (\d)/)?.[1] ?? i}`,
+        eta: r.eta_min ?? 0,
+        deadline: r.deadline_min,
+        agent: r.agent_name,
+        route: r.selected_route_id,
+      })) ?? [],
+    [batch]
+  );
 
-    <main className="main-area">
-      <header className="topbar"><div className="breadcrumbs">Workspace <span>/</span> {view==='overview'?'Overview':view==='input'?'Input data':view==='architectures'?'Agent architectures':view==='comparison'?'Comparison':'Diagnostics'}</div><div className="top-actions"><div className={`connection ${connected?'ok':''}`}><span/> {connected?'Python engine connected':'Connecting to Python'}</div></div></header>
-      <div className="content">
-        <div className="welcome-row"><div><div className="eyebrow"><span className="eyebrow-line"/> SIMULATION STUDIO <span className="eyebrow-muted">/ 01 — 05</span></div><h1>{view==='overview'?'Delivery agent simulator':view==='input'?'Enter delivery conditions':view==='architectures'?'Agent architecture lab':view==='comparison'?'Performance comparison':'System diagnostics'}<span className="heading-period">.</span></h1><p>{view==='overview'?'Enter delivery conditions, choose an agent, and inspect its live decision.':view==='input'?'Set route and delivery conditions, select an agent, then run or compare the Python simulation.':view==='architectures'?'Explore the reasoning structure behind each autonomous delivery agent.':view==='comparison'?(compareScope==='suite'?'Compare all agents across the three sample situations.':'Compare every agent on your current delivery input.'): 'Run live checks against the Python simulation engine.'}</p></div><div className="date-chip"><span className="date-dot"/> PYTHON SIMULATION <span className="date-divider"/> USER-DEFINED INPUT</div></div>
-        {error&&<div className="error-banner">{error}<button onClick={()=>setError('')}>Dismiss</button></div>}
-        {view==='overview'&&<>
-          <section className="test-templates"><div className="template-heading"><div><div className="section-kicker"><Layers3 size={13}/> THREE ASSIGNMENT TEST SITUATIONS</div><span>Sample conditions. Edit one, then compare all agents on your entered input.</span></div><button className="text-btn" onClick={()=>{setDraft(activeScenario?structuredClone(activeScenario):null);setView('input')}}><SlidersHorizontal size={14}/> Enter scenario data</button></div><div className="template-grid">{[
-            {id:'s1-normal',n:'01',title:'Normal delivery',conditions:'Normal traffic · good weather',focus:'How agents choose routes under normal conditions',tone:'green'},
-            {id:'s2-traffic',n:'02',title:'Traffic congestion',conditions:'Heavy traffic · alternate routes',focus:'Whether agents consider alternate routes',tone:'blue'},
-            {id:'s3-urgent-rain',n:'03',title:'Urgent delivery',conditions:'Heavy traffic · rain · urgent order',focus:'How agents balance weather, deadlines, and priority',tone:'amber'},
-          ].map(t=><button key={t.id} className={`template-card ${scenarioId===t.id?'template-active':''}`} onClick={()=>{setScenarioId(t.id);setDecision(null)}}><span className={`template-number ${t.tone}`}>{t.n}</span><span className="template-copy"><b>{t.title}</b><small>{t.conditions}</small><em>{t.focus}</em></span><ArrowRight size={14}/></button>)}</div></section>
-          <section className="hero-grid">
-            <div className="card simulator-card"><div className="card-head"><div><div className="section-kicker"><Sparkles size={13}/> DECISION PLAYGROUND</div><h2>Run a simulation</h2></div><div className="python-pill"><span/> PYTHON ENGINE</div></div>
-              <div className="select-grid"><label><span>AGENT MODEL</span><div className="select-wrap"><span className="select-dot" style={{background:activeAgent.color}}/><select value={agentId} onChange={e=>{setAgentId(e.target.value);setDecision(null)}}>{agents.map(a=><option value={a.id} key={a.id}>{a.name}</option>)}</select><ChevronDown size={15}/></div></label><label><span>DELIVERY SCENARIO</span><div className="select-wrap"><MapPin size={15} className="select-icon"/><select value={scenarioId} onChange={e=>{setScenarioId(e.target.value);setDecision(null)}}>{scenarios.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select><ChevronDown size={15}/></div></label></div>
-              <div className="scenario-strip"><div className="scenario-condition"><span className="condition-icon weather">{activeScenario?.weather==='rain'?'☔':'☀'}</span><div><small>WEATHER</small><b>{activeScenario?.weather??'—'}</b></div></div><div className="scenario-condition"><span className="condition-icon priority"><Zap size={15}/></span><div><small>PRIORITY</small><b>{activeScenario?.priority??'—'}</b></div></div><div className="scenario-condition"><span className="condition-icon deadline"><Clock3 size={15}/></span><div><small>DEADLINE</small><b>{activeScenario?.deadline_min??'—'} min</b></div></div><button className="edit-scenario" onClick={()=>{setDraft(activeScenario?structuredClone(activeScenario):null);setView('input')}}><SlidersHorizontal size={14}/> Edit inputs</button></div>
-              <div className="button-row"><button className="primary-btn" disabled={busy||!activeScenario} onClick={runOne}><Play size={15} fill="currentColor"/> {busy?'Simulating…':'Run this agent'} <ArrowRight size={15}/></button><button className="text-btn" disabled={busy||!activeScenario} onClick={compareCurrent}><Layers3 size={15}/> Compare all agents on this input</button><button className="text-btn" disabled={busy} onClick={runBatch}><Activity size={15}/> Run 3-situation suite</button></div>
+  // Initial Load
+  useEffect(() => {
+    api
+      .health()
+      .then(() => setConnected(true))
+      .catch(() => setConnected(false));
+
+    api
+      .agents()
+      .then(setAgents)
+      .catch(() => {});
+
+    api
+      .scenarios()
+      .then((items) => {
+        setScenarios(items);
+        if (items[0]) {
+          setScenarioId(items[0].id);
+          setDraft(structuredClone(items[0]));
+        }
+      })
+      .catch((e) => setError(`Backend unavailable: ${e.message}`));
+
+    api
+      .learningMemory()
+      .then(setMemory)
+      .catch(() => {});
+  }, []);
+
+  // Fetch Architecture when Agent changes
+  useEffect(() => {
+    api
+      .architecture(agentId)
+      .then(setArchitecture)
+      .catch(() => setArchitecture(null));
+    setStep(0);
+    setIsPlaying(false);
+  }, [agentId]);
+
+  // Auto-run single agent when active scenario or agent is initially loaded
+  useEffect(() => {
+    if (activeScenario && !decision && connected) {
+      runOne();
+    }
+  }, [activeScenario?.id, connected]);
+
+  // Automated playback timer
+  useEffect(() => {
+    if (isPlaying) {
+      const intervalMs = Math.round(1100 / playbackSpeed);
+      playTimerRef.current = window.setInterval(() => {
+        setStep((prev) => {
+          if (prev >= liveTrace.length - 1) {
+            setIsPlaying(false);
+            if (decision?.on_time) {
+              try {
+                confetti({ particleCount: 35, spread: 60, origin: { y: 0.7 } });
+              } catch (_) {}
+            }
+            return prev;
+          }
+          return prev + 1;
+        });
+      }, intervalMs);
+    } else {
+      if (playTimerRef.current) {
+        clearInterval(playTimerRef.current);
+        playTimerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+    };
+  }, [isPlaying, liveTrace.length, playbackSpeed, decision]);
+
+  const togglePlay = () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+    } else {
+      if (step >= liveTrace.length - 1) {
+        setStep(0);
+      }
+      setIsPlaying(true);
+    }
+  };
+
+  async function runOne() {
+    setBusy(true);
+    setError('');
+    setIsPlaying(false);
+    try {
+      const r = await api.simulateAgent(agentId, scenarioId);
+      setDecision(r);
+      setStep(0);
+      api
+        .learningMemory()
+        .then(setMemory)
+        .catch(() => {});
+      // Also silently fetch all agents for this scenario to populate behavior matrix
+      api
+        .simulateAll(scenarioId)
+        .then((all) => setCurrentScenarioDecisions(all.results))
+        .catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runBatch() {
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api.simulateBatch();
+      setBatch(r);
+      setCompareScope('suite');
+      setView('comparison');
+      api
+        .learningMemory()
+        .then(setMemory)
+        .catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function compareCurrent() {
+    if (!activeScenario) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api.simulateAll(scenarioId);
+      setCurrentScenarioDecisions(r.results);
+      setBatch({
+        count: r.results.length,
+        records: r.results,
+        scenarios: [r.scenario],
+        summary: { per_scenario: {}, per_agent: {} },
+      });
+      setCompareScope('current');
+      setView('comparison');
+      api
+        .learningMemory()
+        .then(setMemory)
+        .catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runDiagnostics() {
+    setBusy(true);
+    try {
+      setDiagnostics(await api.runDiagnostics());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function validateDraft(): Promise<boolean> {
+    if (!draft) return false;
+    const result = await api.validateScenario(draft);
+    if (!result.valid) {
+      setError(result.errors.join(' · '));
+      return false;
+    }
+    return true;
+  }
+
+  async function validateAndSaveDraft() {
+    if (!draft) return;
+    setError('');
+    try {
+      const checked = await api.validateScenario(draft);
+      if (!checked.valid) {
+        setError(checked.errors.join(' · '));
+        return;
+      }
+      await api.createScenario({ ...draft, id: undefined, custom: true });
+      const list = await api.scenarios();
+      setScenarios(list);
+      const added = [...list].reverse().find((s) => s.custom && s.name === draft.name);
+      if (added) {
+        setScenarioId(added.id);
+        setDraft(added);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function runDraftAgent() {
+    if (!draft) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (!(await validateDraft())) return;
+      const result = await api.simulateAgent(agentId, undefined, {
+        ...draft,
+        id: draft.id || 'custom-test',
+      });
+      setDecision(result);
+      setStep(0);
+      setView('overview');
+      api
+        .learningMemory()
+        .then(setMemory)
+        .catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function compareDraft() {
+    if (!draft) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (!(await validateDraft())) return;
+      const result = await api.simulateAll(undefined, {
+        ...draft,
+        id: draft.id || 'custom-test',
+      });
+      setCurrentScenarioDecisions(result.results);
+      setBatch({
+        count: result.results.length,
+        records: result.results,
+        scenarios: [result.scenario],
+        summary: { per_scenario: {}, per_agent: {} },
+      });
+      setCompareScope('current');
+      setView('comparison');
+      api
+        .learningMemory()
+        .then(setMemory)
+        .catch(() => {});
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="app-shell">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">
+            <Truck size={22} />
+          </div>
+          <div>
+            <b>
+              dispatch<span>lab</span>
+            </b>
+            <small>SMART DELIVERY 3D</small>
+          </div>
+        </div>
+
+        <div className="workspace">
+          <div className="workspace-icon">3D</div>
+          <div>
+            <b>Autonomous Agent Sim</b>
+            <small>Explainable AI Simulator</small>
+          </div>
+        </div>
+
+        <div className="nav-label">MAIN WORKSPACE</div>
+        <nav>
+          {(
+            [
+              ['overview', '3D Simulation Studio', Gauge],
+              ['input', 'Enter Test Data', SlidersHorizontal],
+              ['behavior', 'Agent Behaviors', Layers],
+              ['architectures', 'Neural Architectures', GitBranch],
+              ['comparison', 'Compare Agents', Layers3],
+              ['diagnostics', 'Diagnostics Check', ShieldCheck],
+            ] as const
+          ).map(([id, label, Icon]) => (
+            <button
+              key={id}
+              className={`nav-item ${view === id ? 'selected' : ''}`}
+              onClick={() => {
+                if (id === 'input' && !draft && activeScenario) {
+                  setDraft(structuredClone(activeScenario));
+                }
+                setView(id);
+              }}
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+              {id === 'comparison' && batch && <i>{batch.count}</i>}
+            </button>
+          ))}
+        </nav>
+
+        <div className="nav-label agents-label">
+          THE SEVEN AGENTS{' '}
+          <button title="View Agent Architectures" onClick={() => setView('architectures')}>
+            <ArrowRight size={14} />
+          </button>
+        </div>
+        <div className="agent-menu">
+          {agents.map((a) => (
+            <button
+              className={a.id === agentId ? 'active' : ''}
+              onClick={() => {
+                setAgentId(a.id);
+                setDecision(null);
+              }}
+              key={a.id}
+            >
+              <span className="agent-dot" style={{ background: a.color }} />
+              <span>{a.name}</span>
+              {a.id === agentId && <span className="tiny-arrow">●</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="sidebar-bottom">
+          <div className="memory-card">
+            <div className="memory-top">
+              <span>
+                <Database size={14} /> LEARNING MEMORY
+              </span>
+              <span className="live-dot" />
             </div>
-            <div className="card outcome-card"><div className="outcome-top"><div className="section-kicker"><Activity size={13}/> LATEST OUTCOME</div><span className={decision?.on_time?'status-good':'status-idle'}>{decision?(decision.on_time?'ON TIME':'LATE'):'AWAITING RUN'}</span></div>{decision?<><div className="outcome-route"><div className="route-emblem" style={{color:activeAgent.color,background:`${activeAgent.color}18`}}><RouteIcon size={21}/></div><div><small>SELECTED ROUTE</small><h2>Route {decision.selected_route_id??'—'}</h2></div><span className="result-arrow"><ArrowDownRight size={18}/></span></div><div className="outcome-stats"><div><small>EST. ARRIVAL</small><b>{decision.eta_min??'—'}<em> min</em></b></div><div><small>DELIVERY COST</small><b>Rs. {decision.cost??'—'}</b></div><div><small>DEADLINE</small><b>{decision.deadline_min}<em> min</em></b></div></div><div className="plain-explanation"><b>Why this choice?</b><p>{decision.plain_explanation||decision.summary}</p></div></>:<div className="outcome-empty"><div className="pulse-orbit"><Truck size={23}/></div><b>Your result will appear here</b><span>Run a scenario to see the agent’s actual decision.</span></div>}</div>
+            <b>
+              {memory?.deliveries.length ?? 0} <small>past deliveries</small>
+            </b>
+            <div className="memory-meter">
+              <i style={{ width: `${Math.min(100, (memory?.deliveries.length ?? 0) * 8)}%` }} />
+            </div>
+            <button
+              onClick={async () => {
+                const m = await api.resetLearning('empty');
+                setMemory(m);
+                setDecision(null);
+              }}
+            >
+              <RotateCcw size={12} /> Clear experience
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <main className="main-area">
+        {/* Topbar */}
+        <header className="topbar">
+          <div className="breadcrumbs">
+            Workspace <span>/</span>{' '}
+            {view === 'overview'
+              ? '3D Simulation Studio'
+              : view === 'input'
+              ? 'Enter Test Data Separately'
+              : view === 'behavior'
+              ? 'Agent Behaviors'
+              : view === 'architectures'
+              ? 'Agent Architectures'
+              : view === 'comparison'
+              ? 'Performance Comparison'
+              : 'Diagnostics'}
+          </div>
+          <div className="top-actions">
+            <div className={`connection ${connected ? 'ok' : ''}`}>
+              <span /> {connected ? 'Python Simulation Engine Connected' : 'Connecting to Python API…'}
+            </div>
+          </div>
+        </header>
+
+        <div className="content">
+          {/* Header Banner */}
+          <div className="welcome-row">
+            <div>
+              <div className="eyebrow">
+                <span className="eyebrow-line" /> EXPLAINABLE AI DISPATCH STUDIO
+              </div>
+              <h1>
+                {view === 'overview'
+                  ? '3D Autonomous Delivery Simulation'
+                  : view === 'input'
+                  ? 'Enter Delivery Test Data Separately'
+                  : view === 'behavior'
+                  ? 'How Each Agent Behaves & Reasons'
+                  : view === 'architectures'
+                  ? 'Interactive Neural Architecture Lab'
+                  : view === 'comparison'
+                  ? 'Agent Performance Comparison'
+                  : 'System Engine Self-Checks'}
+                <span className="heading-period">.</span>
+              </h1>
+              <p>
+                {view === 'overview'
+                  ? 'Watch autonomous agents navigate real-time 3D delivery routes, compare logic step-by-step, and inspect decision reasoning.'
+                  : view === 'input'
+                  ? 'Enter custom test conditions separately (weather, traffic, deadlines, costs) and instantly simulate any agent.'
+                  : view === 'behavior'
+                  ? 'Understand the distinct mindset and internal philosophy of all seven autonomous agents.'
+                  : view === 'architectures'
+                  ? 'Inspect the 3D neural node graph and structural reasoning pathways behind each delivery model.'
+                  : view === 'comparison'
+                  ? compareScope === 'suite'
+                    ? 'Comparing all 7 agents across the 3 standard assignment test scenarios.'
+                    : 'Comparing all 7 agents on your entered delivery input.'
+                  : 'Run comprehensive automated tests against the FastAPI Python simulation engine.'}
+              </p>
+            </div>
+            <div className="header-badge-chip">
+              <span className="date-dot" /> 3D VISUALIZATION ACTIVE
+            </div>
+          </div>
+
+          {/* Error Banner */}
+          {error && (
+            <div className="error-banner">
+              <span>{error}</span>
+              <button onClick={() => setError('')}>Dismiss</button>
+            </div>
+          )}
+
+          {/* 3 PRESET TEST SITUATIONS - Prominent Quick Selection Strip */}
+          <section className="test-templates-bar">
+            <div className="bar-title">
+              <Layers3 size={15} className="text-emerald-400" />
+              <span>THREE ASSIGNMENT TEST SCENARIOS:</span>
+            </div>
+            <div className="scenario-pill-list">
+              {[
+                {
+                  id: 's1-normal',
+                  num: '01',
+                  name: 'Normal Delivery',
+                  desc: 'Clear weather · Light traffic · 40m deadline',
+                  tag: 'Clear & Fast',
+                },
+                {
+                  id: 's2-traffic',
+                  num: '02',
+                  name: 'Traffic Congestion',
+                  desc: 'Heavy traffic on Route A (30m) · Route B clear (20m)',
+                  tag: 'Traffic Jam',
+                },
+                {
+                  id: 's3-urgent-rain',
+                  num: '03',
+                  name: 'Urgent + Rain Storm',
+                  desc: 'Rain · Urgent VIP order · Tight 25m deadline',
+                  tag: 'Rain & Rush',
+                },
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  className={`scenario-quick-pill ${scenarioId === t.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setScenarioId(t.id);
+                    setDecision(null);
+                    const found = scenarios.find((s) => s.id === t.id);
+                    if (found) setDraft(structuredClone(found));
+                  }}
+                >
+                  <span className="pill-number">{t.num}</span>
+                  <div className="pill-text">
+                    <b>{t.name}</b>
+                    <small>{t.desc}</small>
+                  </div>
+                  <span className="pill-tag">{t.tag}</span>
+                </button>
+              ))}
+
+              <button
+                className="scenario-quick-pill enter-custom-pill"
+                onClick={() => {
+                  if (!draft && activeScenario) setDraft(structuredClone(activeScenario));
+                  setView('input');
+                }}
+              >
+                <SlidersHorizontal size={15} />
+                <div className="pill-text">
+                  <b>+ Enter Test Data</b>
+                  <small>Custom weather, routes & deadlines</small>
+                </div>
+              </button>
+            </div>
           </section>
-          <section className="below-grid"><div className="card architecture-card"><div className="card-title-row"><div><div className="section-kicker"><GitBranch size={13}/> LIVE REASONING</div><h2>{architecture?.title??activeAgent.name}</h2></div><button className="subtle-btn" onClick={()=>setView('architectures')}>Explore architecture <ArrowRight size={14}/></button></div><p className="architecture-summary">{architecture?.summary??activeAgent.description}</p><ArchitectureDiagram architecture={architecture} currentStep={currentStep} trace={liveTrace} agentColor={activeAgent.color}/><div className="trace-footer"><div className="trace-progress"><span>{liveTrace.length?String(Math.min(step+1,liveTrace.length)).padStart(2,'0'):'00'}</span><i><b style={{width:liveTrace.length?`${(Math.min(step+1,liveTrace.length)/liveTrace.length)*100}%`:'0%',background:activeAgent.color}}/></i><span>{String(liveTrace.length).padStart(2,'0')} EVENTS</span></div><button className="step-btn" disabled={!liveTrace.length} onClick={()=>step<liveTrace.length-1?setStep(step+1):animateTrace()}><Play size={12} fill="currentColor"/> {step<liveTrace.length-1?'Step forward':'Replay trace'}</button></div>{currentStep&&<div className="active-event"><span style={{background:activeAgent.color}}/>{currentStep.label}<small>{currentStep.detail}</small></div>}</div>
-            <div className="card recent-card"><div className="card-title-row"><div><div className="section-kicker"><Compass size={13}/> ROUTE CONDITIONS</div><h2>Available routes</h2></div><span className="count-pill">{activeScenario?.routes.length??0} OPTIONS</span></div><div className="route-list">{activeScenario?.routes.map(r=><div className={`route-row ${decision?.selected_route_id===r.id?'route-selected':''}`} key={r.id}><div className="route-line-icon"><span/></div><div className="route-name"><b>Route {r.id}</b><small>{r.distance_km} km · {r.traffic_level} traffic</small></div><div className="route-time"><b>{r.travel_time_min}<small> min</small></b><span>Rs. {r.cost}</span></div><div className={`route-availability ${r.available?'':'unavailable'}`}>{r.available?'OPEN':'CLOSED'}</div></div>)}</div><div className="route-note"><span className="note-pin"><MapPin size={13}/></span><span>Measurements are scenario inputs. Python selects a route and generates the explanation.</span></div></div></section>
-          <section className="bottom-grid"><div className="card trace-card"><div className="card-title-row"><div><div className="section-kicker"><Activity size={13}/> REASONING TRACE</div><h2>Decision timeline</h2></div>{decision&&<button className="subtle-btn" onClick={animateTrace}><Play size={13}/> Replay</button>}</div>{liveTrace.length?<div className="timeline">{liveTrace.map((t,i)=><button className={`timeline-event ${i===step?'event-active':''} ${i<step?'event-done':''}`} key={`${t.index}-${t.node_id}`} onClick={()=>setStep(i)}><span className="timeline-node">{i<step?<Check size={12}/>:String(i+1).padStart(2,'0')}</span><span className="timeline-copy"><b>{t.label}</b><small>{t.detail}</small></span><span className="phase-tag">{t.phase}</span></button>)}</div>:<div className="trace-placeholder"><div className="timeline-node muted">01</div><span>Run the agent to inspect its actual Python-generated reasoning events.</span></div>}</div><div className="card insight-card"><div className="section-kicker"><Sparkles size={13}/> ARCHITECTURE NOTE</div><h2>{activeAgent.name}</h2><p>{activeAgent.description}</p><div className="insight-meta"><span><span className="agent-dot" style={{background:activeAgent.color}}/> DETERMINISTIC POLICY</span><span><ShieldCheck size={13}/> EXPLAINABLE</span></div></div></section>
-        </>}
-        {view==='input'&&draft&&<section className="input-workspace"><div className="input-agent-card"><div><div className="section-kicker"><Sparkles size={13}/> DECISION MODEL</div><h2>Choose the agent</h2><p>Select which architecture should reason over these delivery conditions.</p><button className="text-btn back-overview" onClick={()=>setView('overview')}><ArrowRight size={13}/> Back to overview</button></div><div className="input-selectors"><label><span>START FROM SAMPLE</span><div className="select-wrap"><select value={scenarioId} onChange={e=>{const next=scenarios.find(s=>s.id===e.target.value);setScenarioId(e.target.value);if(next)setDraft(structuredClone(next))}}>{scenarios.map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select><ChevronDown size={15}/></div></label><label><span>AGENT TYPE</span><div className="select-wrap"><span className="select-dot" style={{background:activeAgent.color}}/><select value={agentId} onChange={e=>setAgentId(e.target.value)}>{agents.map(a=><option value={a.id} key={a.id}>{a.name}</option>)}</select><ChevronDown size={15}/></div></label></div></div><ScenarioEditor scenario={draft} onChange={setDraft} onSave={validateAndSave} onRun={runDraftAgent} onCompare={compareDraft}/><div className="input-help"><b>What happens when you run?</b><span>The selected Python agent evaluates your entered routes and conditions. The result includes the chosen action, decision summary, and the full reasoning trace.</span></div></section>}
-        {view==='input'&&!draft&&<div className="card input-empty"><b>Scenario inputs are loading</b><span>Once the Python backend is connected, you can start from a sample or enter your own delivery conditions.</span></div>}
-        {view==='architectures'&&<section className="card full-architecture"><div className="card-title-row"><div><div className="section-kicker"><GitBranch size={13}/> ARCHITECTURE EXPLORER</div><h2>{architecture?.title??activeAgent.name}</h2></div><select className="agent-select" value={agentId} onChange={e=>setAgentId(e.target.value)}>{agents.map(a=><option value={a.id} key={a.id}>{a.name}</option>)}</select></div><p className="architecture-summary">{architecture?.summary}</p><ArchitectureDiagram architecture={architecture} currentStep={currentStep} trace={liveTrace} agentColor={activeAgent.color} large/><div className="architecture-bottom"><div><h3>Strengths</h3>{architecture?.strengths.map(x=><span className="quality-pill" key={x}><Check size={12}/>{x}</span>)}</div><div><h3>Trade-offs</h3>{architecture?.weaknesses.map(x=><span className="quality-pill weakness" key={x}><ArrowDownRight size={12}/>{x}</span>)}</div></div></section>}
-        {view==='comparison'&&<><div className="metric-grid"><Metric icon={<Layers3/>} label="DECISIONS RUN" value={batch?.count??'—'} detail={compareScope==='suite'?'3 test situations × 7 agents':'Current input × 7 agents'}/><Metric icon={<Check/>} label="ON-TIME DELIVERIES" value={batch?`${Math.round(batch.records.filter(r=>r.on_time).length/batch.count*100)}%`:'—'} detail="Across the selected comparison"/><Metric icon={<Clock3/>} label="FASTEST ESTIMATE" value={batch?`${Math.min(...batch.records.filter(r=>r.eta_min!==null).map(r=>r.eta_min!))} min`:'—'} detail="Within the selected results"/><Metric icon={<Activity/>} label="ACTIVE MODELS" value="07" detail="Independent architectures"/></div><div className="card chart-card"><div className="card-title-row"><div><div className="section-kicker"><Activity size={13}/> {compareScope==='suite'?'THREE-SITUATION RESULTS':'CURRENT INPUT RESULTS'}</div><h2>Estimated arrival by agent</h2></div><div className="comparison-actions"><button className="text-btn" onClick={compareScope==='suite'?compareCurrent:runBatch} disabled={busy}>{compareScope==='suite'?'Compare current input':'Run 3-situation suite'}</button><button className="primary-btn compact" onClick={compareScope==='suite'?runBatch:compareCurrent} disabled={busy}><Play size={13} fill="currentColor"/>{batch?'Rerun comparison':'Run comparison'}</button></div></div>{batch?<><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData}><defs><linearGradient id="etaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#a6e86a" stopOpacity={.22}/><stop offset="100%" stopColor="#a6e86a" stopOpacity={0}/></linearGradient></defs><CartesianGrid stroke="#20302b" vertical={false}/><XAxis dataKey="label" tick={{fill:'#77867f',fontSize:13}} axisLine={false} tickLine={false}/><YAxis tick={{fill:'#77867f',fontSize:13}} axisLine={false} tickLine={false}/><Tooltip contentStyle={{background:'#111d19',border:'1px solid #293a32',borderRadius:12,color:'#e8f0eb'}}/><Area type="monotone" dataKey="eta" stroke="#a6e86a" strokeWidth={2} fill="url(#etaFill)"/></AreaChart></ResponsiveContainer></div><div className="table-scroll"><table><thead><tr><th>SCENARIO</th><th>AGENT</th><th>ACTION</th><th>EST. ETA</th><th>DEADLINE</th><th>WHY THIS CHOICE?</th></tr></thead><tbody>{batch.records.map((r,i)=><tr key={`${r.scenario_id}-${r.agent_id}-${i}`}><td>{r.scenario_name}</td><td><span className="agent-dot" style={{background:agents.find(a=>a.id===r.agent_id)?.color}}/>{r.agent_name}</td><td>{actionLabel(r)}</td><td>{r.eta_min??'—'} min</td><td>{r.deadline_min} min</td><td><p className="plain-explanation table-explanation">{r.plain_explanation||r.summary}</p><details className="reason-details"><summary>Show agent steps</summary><ol>{r.reasoning.map((event,j)=><li key={`${event.index}-${j}`}><b>{event.label}</b><span>{event.detail}</span></li>)}</ol></details></td></tr>)}</tbody></table></div></>:<div className="empty-comparison"><div className="pulse-orbit"><Layers3 size={22}/></div><b>Your comparison is ready to generate</b><span>Select an agent comparison or run the three-situation test suite.</span><button className="primary-btn" onClick={runBatch} disabled={busy}><Play size={14} fill="currentColor"/> Run three-situation suite</button></div>}</div></>}
-        {view==='diagnostics'&&<div className="card diagnostics-card"><div className="card-title-row"><div><div className="section-kicker"><ShieldCheck size={13}/> APPLICATION SELF-CHECK</div><h2>Testing center</h2></div><div className="comparison-actions"><button className="text-btn" onClick={()=>{setDraft(activeScenario?structuredClone(activeScenario):null);setView('input')}}><SlidersHorizontal size={13}/> Enter test data</button><button className="primary-btn compact" onClick={runDiagnostics} disabled={busy}><Activity size={14}/>{busy?'Running checks…':'Run diagnostics'}</button></div></div><p className="architecture-summary">Run the three assignment situations with all seven agents, or enter your own route, weather, priority, and deadline values. Inputs are simulated by Python; no live traffic feed is assumed.</p><div className="diagnostic-test-row"><div><b>01 · Normal delivery</b><span>Normal traffic and good weather</span></div><div><b>02 · Traffic congestion</b><span>Heavy traffic and multiple routes</span></div><div><b>03 · Urgent delivery</b><span>Heavy traffic, rain, urgent order</span></div><button className="primary-btn compact" onClick={runBatch} disabled={busy}><Play size={12} fill="currentColor"/>Run 21 decisions</button></div>{diagnostics?<><div className="diagnostic-summary"><b>{diagnostics.passed}<small> / {diagnostics.total} checks passed</small></b><span>{diagnostics.duration_ms} ms total</span></div><div className="diagnostic-list">{diagnostics.checks.map(c=><div className="diagnostic-row" key={c.name}><span className={`diagnostic-mark ${c.passed?'pass':'fail'}`}>{c.passed?<Check size={13}/>:<span>!</span>}</span><div><b>{c.name}</b><small>{c.detail}</small></div><span className="diag-group">{c.group}</span><time>{c.duration_ms} ms</time></div>)}</div></>:<div className="empty-comparison"><div className="pulse-orbit"><ShieldCheck size={22}/></div><b>Ready to verify the system</b><span>Diagnostics are actual checks against the backend simulation engine.</span><button className="primary-btn" onClick={runDiagnostics}><Play size={14} fill="currentColor"/> Run diagnostics</button></div>}</div>}
-        <footer><span>DISPATCH LAB <i>·</i> EXPLAINABLE AGENT SIMULATION</span><span><span className={`footer-dot ${connected?'':'offline'}`}/>{connected?'Connected to Python engine':'Backend connection pending'} <i>·</i> Python API</span></footer>
+
+          {/* VIEW: OVERVIEW (3D Simulation & Step-by-Step Reasoner) */}
+          {view === 'overview' && (
+            <>
+              {/* Agent & Scenario Controller Strip */}
+              <section className="simulation-control-card">
+                <div className="sim-control-left">
+                  <div className="sim-selector-group">
+                    <label>
+                      <span>SELECT AGENT ARCHITECTURE</span>
+                      <div className="select-wrap">
+                        <span className="select-dot" style={{ background: activeAgent.color }} />
+                        <select
+                          value={agentId}
+                          onChange={(e) => {
+                            setAgentId(e.target.value);
+                            setDecision(null);
+                          }}
+                        >
+                          {agents.map((a) => (
+                            <option value={a.id} key={a.id}>
+                              {a.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={16} />
+                      </div>
+                    </label>
+
+                    <label>
+                      <span>TEST SCENARIO</span>
+                      <div className="select-wrap">
+                        <MapPin size={16} className="select-icon" />
+                        <select
+                          value={scenarioId}
+                          onChange={(e) => {
+                            setScenarioId(e.target.value);
+                            setDecision(null);
+                            const found = scenarios.find((s) => s.id === e.target.value);
+                            if (found) setDraft(structuredClone(found));
+                          }}
+                        >
+                          {scenarios.map((s) => (
+                            <option value={s.id} key={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={16} />
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Conditions Chips */}
+                  <div className="conditions-mini-strip">
+                    <div className="mini-condition">
+                      {activeScenario?.weather === 'rain' ? <CloudRain size={16} /> : <Sun size={16} />}
+                      <span>{activeScenario?.weather === 'rain' ? 'Rain (+20% delay)' : 'Clear Sky'}</span>
+                    </div>
+                    <div className="mini-condition">
+                      <Zap size={15} />
+                      <span>{activeScenario?.priority === 'urgent' ? '🚨 Urgent VIP' : 'Normal Priority'}</span>
+                    </div>
+                    <div className="mini-condition">
+                      <Clock3 size={15} />
+                      <span>Deadline: <b>{activeScenario?.deadline_min ?? '—'}m</b></span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="sim-control-actions">
+                  <button className="primary-action-btn" disabled={busy || !activeScenario} onClick={runOne}>
+                    <Play size={16} fill="currentColor" />
+                    <span>{busy ? 'Simulating…' : `Simulate ${activeAgent.name.split(' ')[0]}`}</span>
+                  </button>
+                  <button className="secondary-action-btn" disabled={busy || !activeScenario} onClick={compareCurrent}>
+                    <Layers3 size={15} />
+                    <span>Compare All 7 Agents</span>
+                  </button>
+                  <button
+                    className="tertiary-action-btn"
+                    onClick={() => {
+                      if (!draft && activeScenario) setDraft(structuredClone(activeScenario));
+                      setView('input');
+                    }}
+                  >
+                    <SlidersHorizontal size={15} />
+                    <span>Enter Custom Data</span>
+                  </button>
+                </div>
+              </section>
+
+              {/* 3D Visualizer & Live Outcome Showcase */}
+              <section className="visualizer-showcase-grid">
+                {/* 3D Visualizer Stage */}
+                <div className="visualizer-stage-card">
+                  <div className="stage-header">
+                    <div className="stage-title-wrap">
+                      <Sparkles size={16} style={{ color: activeAgent.color }} />
+                      <h3>3D Real-Time Agent Simulation Canvas</h3>
+                    </div>
+
+                    <div className="stage-mode-switcher">
+                      <button
+                        className={`mode-btn ${visualizerMode === 'city' ? 'active' : ''}`}
+                        onClick={() => setVisualizerMode('city')}
+                      >
+                        <Truck size={14} />
+                        <span>3D Delivery City</span>
+                      </button>
+                      <button
+                        className={`mode-btn ${visualizerMode === 'brain' ? 'active' : ''}`}
+                        onClick={() => setVisualizerMode('brain')}
+                      >
+                        <Brain size={14} />
+                        <span>3D Neural Brain</span>
+                      </button>
+                      <button
+                        className={`mode-btn ${visualizerMode === 'diagram' ? 'active' : ''}`}
+                        onClick={() => setVisualizerMode('diagram')}
+                      >
+                        <GitBranch size={14} />
+                        <span>2D Architecture</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Canvas Render Area */}
+                  <div className="stage-viewport">
+                    {visualizerMode === 'city' && (
+                      <CityScene3D
+                        scenario={activeScenario}
+                        selectedRouteId={decision?.selected_route_id ?? null}
+                        agentColor={activeAgent.color}
+                        agentName={activeAgent.name}
+                        progressPercent={progressPercent}
+                        isPlaying={isPlaying}
+                        onTogglePlay={togglePlay}
+                        etaMin={decision?.eta_min}
+                        deadlineMin={decision?.deadline_min ?? activeScenario?.deadline_min}
+                        onTime={decision?.on_time}
+                      />
+                    )}
+
+                    {visualizerMode === 'brain' && (
+                      <AgentBrain3D
+                        architecture={architecture}
+                        currentStep={currentStep}
+                        trace={liveTrace}
+                        agentColor={activeAgent.color}
+                        agentName={activeAgent.name}
+                      />
+                    )}
+
+                    {visualizerMode === 'diagram' && (
+                      <div className="diagram-embed-wrap">
+                        <ArchitectureDiagram
+                          architecture={architecture}
+                          currentStep={currentStep}
+                          trace={liveTrace}
+                          agentColor={activeAgent.color}
+                          large
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Live Outcome Summary Panel */}
+                <div className="live-outcome-card">
+                  <div className="outcome-head">
+                    <div className="outcome-kicker">
+                      <Activity size={14} />
+                      <span>DECISION RESULT</span>
+                    </div>
+                    {decision && (
+                      <span className={`status-badge ${decision.on_time ? 'on-time' : 'late'}`}>
+                        {decision.on_time ? '✓ ON TIME' : '⚠ LATE RISK'}
+                      </span>
+                    )}
+                  </div>
+
+                  {decision ? (
+                    <div className="outcome-body">
+                      <div className="selected-route-highlight" style={{ borderColor: activeAgent.color }}>
+                        <div className="route-icon-box" style={{ background: `${activeAgent.color}25`, color: activeAgent.color }}>
+                          <RouteIcon size={24} />
+                        </div>
+                        <div className="route-title-text">
+                          <small>SELECTED ROUTE</small>
+                          <h4>Route {decision.selected_route_id || 'None'}</h4>
+                        </div>
+                        <span className="route-arrow">
+                          <ArrowDownRight size={20} />
+                        </span>
+                      </div>
+
+                      <div className="stats-metric-strip">
+                        <div className="stat-box">
+                          <small>EST. ARRIVAL</small>
+                          <b>{decision.eta_min ?? '—'} <span className="unit">min</span></b>
+                        </div>
+                        <div className="stat-box">
+                          <small>TARGET DEADLINE</small>
+                          <b>{decision.deadline_min} <span className="unit">min</span></b>
+                        </div>
+                        <div className="stat-box">
+                          <small>DELIVERY COST</small>
+                          <b>Rs. {decision.cost ?? '—'}</b>
+                        </div>
+                      </div>
+
+                      {/* Plain-English Explanation */}
+                      <div className="plain-english-summary">
+                        <b>Why this choice?</b>
+                        <p>{decision.plain_explanation || decision.summary}</p>
+                      </div>
+
+                      {/* Persona Mindset Snippet */}
+                      <div className="persona-note-snippet">
+                        <Sparkles size={14} style={{ color: activeAgent.color }} />
+                        <span>
+                          <b>{activeAgent.name}:</b> {AGENT_PERSONAS[activeAgent.id]?.tagline}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="outcome-placeholder">
+                      <div className="placeholder-pulse">
+                        <Truck size={28} />
+                      </div>
+                      <b>Awaiting Simulation Run</b>
+                      <span>Click "Simulate Agent" above to calculate and visualize decisions in 3D.</span>
+                      <button className="primary-action-btn compact" onClick={runOne} disabled={busy}>
+                        <Play size={14} fill="currentColor" />
+                        <span>Run Simulation</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              {/* Explainable Journey: Step-by-Step Reasoner & Route Elimination */}
+              <section className="explainable-journey-wrapper">
+                <ExplainableJourney
+                  decision={decision}
+                  agent={activeAgent}
+                  scenario={activeScenario}
+                  currentStepIndex={step}
+                  onStepChange={setStep}
+                  isPlaying={isPlaying}
+                  onTogglePlay={togglePlay}
+                  playbackSpeed={playbackSpeed}
+                  onSpeedChange={setPlaybackSpeed}
+                />
+              </section>
+
+              {/* All 7 Agents Behavior Matrix */}
+              <section className="behavior-matrix-section">
+                <BehaviorMatrix
+                  agents={agents}
+                  decisions={currentScenarioDecisions}
+                  scenario={activeScenario}
+                  selectedAgentId={agentId}
+                  onSelectAgent={(aid) => {
+                    setAgentId(aid);
+                    setDecision(null);
+                    window.scrollTo({ top: 120, behavior: 'smooth' });
+                  }}
+                  onRunSimulation={compareCurrent}
+                  isBusy={busy}
+                />
+              </section>
+            </>
+          )}
+
+          {/* VIEW: INPUT (Enter Test Data Separately) */}
+          {view === 'input' && draft && (
+            <section className="custom-input-view">
+              <div className="input-page-header">
+                <button className="back-btn" onClick={() => setView('overview')}>
+                  <ArrowRight size={14} style={{ transform: 'rotate(180deg)' }} />
+                  <span>Back to 3D Simulation</span>
+                </button>
+              </div>
+
+              <CustomDataEditor
+                scenario={draft}
+                onChange={setDraft}
+                onSave={validateAndSaveDraft}
+                onRunAgent={runDraftAgent}
+                onCompareAll={compareDraft}
+                onReset={() => {
+                  if (activeScenario) setDraft(structuredClone(activeScenario));
+                }}
+                isBusy={busy}
+                activeAgentName={activeAgent.name}
+                activeAgentColor={activeAgent.color}
+              />
+            </section>
+          )}
+
+          {/* VIEW: BEHAVIOR MATRIX */}
+          {view === 'behavior' && (
+            <section className="behavior-view-page">
+              <BehaviorMatrix
+                agents={agents}
+                decisions={currentScenarioDecisions}
+                scenario={activeScenario}
+                selectedAgentId={agentId}
+                onSelectAgent={(aid) => {
+                  setAgentId(aid);
+                  setView('overview');
+                }}
+                onRunSimulation={compareCurrent}
+                isBusy={busy}
+              />
+            </section>
+          )}
+
+          {/* VIEW: ARCHITECTURES */}
+          {view === 'architectures' && (
+            <section className="card full-architecture-page">
+              <div className="card-title-row">
+                <div>
+                  <div className="section-kicker">
+                    <GitBranch size={15} />
+                    <span>AGENT ARCHITECTURE LAB</span>
+                  </div>
+                  <h2>{architecture?.title ?? activeAgent.name}</h2>
+                </div>
+                <select
+                  className="agent-select"
+                  value={agentId}
+                  onChange={(e) => setAgentId(e.target.value)}
+                >
+                  {agents.map((a) => (
+                    <option value={a.id} key={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <p className="architecture-summary">{architecture?.summary}</p>
+
+              <div className="architecture-3d-dual">
+                <div className="dual-column">
+                  <div className="dual-header">
+                    <Brain size={16} />
+                    <b>3D Neural Node Graph</b>
+                  </div>
+                  <AgentBrain3D
+                    architecture={architecture}
+                    currentStep={currentStep}
+                    trace={liveTrace}
+                    agentColor={activeAgent.color}
+                    agentName={activeAgent.name}
+                  />
+                </div>
+
+                <div className="dual-column">
+                  <div className="dual-header">
+                    <GitBranch size={16} />
+                    <b>2D Flow Diagram</b>
+                  </div>
+                  <ArchitectureDiagram
+                    architecture={architecture}
+                    currentStep={currentStep}
+                    trace={liveTrace}
+                    agentColor={activeAgent.color}
+                    large
+                  />
+                </div>
+              </div>
+
+              <div className="architecture-bottom-analysis">
+                <div className="strengths-box">
+                  <h4>Core Strengths</h4>
+                  <div className="pill-wrap">
+                    {architecture?.strengths.map((x) => (
+                      <span className="quality-pill" key={x}>
+                        <Check size={13} /> {x}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="weaknesses-box">
+                  <h4>Trade-Offs & Limitations</h4>
+                  <div className="pill-wrap">
+                    {architecture?.weaknesses.map((x) => (
+                      <span className="quality-pill weakness" key={x}>
+                        <AlertTriangle size={13} /> {x}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* VIEW: COMPARISON */}
+          {view === 'comparison' && (
+            <>
+              <div className="metric-grid">
+                <Metric
+                  icon={<Layers3 size={18} />}
+                  label="DECISIONS RUN"
+                  value={batch?.count ?? '—'}
+                  detail={compareScope === 'suite' ? '3 scenarios × 7 agents = 21 runs' : 'Current input × 7 agents'}
+                />
+                <Metric
+                  icon={<Check size={18} />}
+                  label="ON-TIME RATE"
+                  value={
+                    batch
+                      ? `${Math.round(
+                          (batch.records.filter((r) => r.on_time).length / Math.max(1, batch.count)) * 100
+                        )}%`
+                      : '—'
+                  }
+                  detail="Across the tested scenarios"
+                />
+                <Metric
+                  icon={<Clock3 size={18} />}
+                  label="FASTEST ARRIVAL"
+                  value={
+                    batch
+                      ? `${Math.min(
+                          ...batch.records.filter((r) => r.eta_min !== null).map((r) => r.eta_min!)
+                        )} min`
+                      : '—'
+                  }
+                  detail="Best delivery time recorded"
+                />
+                <Metric
+                  icon={<Activity size={18} />}
+                  label="AGENT MODELS"
+                  value="07"
+                  detail="Distinct decision architectures"
+                />
+              </div>
+
+              <div className="card chart-card">
+                <div className="card-title-row">
+                  <div>
+                    <div className="section-kicker">
+                      <Activity size={14} />
+                      <span>{compareScope === 'suite' ? 'THREE-SITUATION RESULTS' : 'CURRENT INPUT RESULTS'}</span>
+                    </div>
+                    <h2>Estimated Arrival Time by Agent</h2>
+                  </div>
+                  <div className="comparison-actions">
+                    <button
+                      className="text-btn"
+                      onClick={compareScope === 'suite' ? compareCurrent : runBatch}
+                      disabled={busy}
+                    >
+                      {compareScope === 'suite' ? 'Compare Current Input Only' : 'Run 3-Situation Suite'}
+                    </button>
+                    <button
+                      className="primary-btn compact"
+                      onClick={compareScope === 'suite' ? runBatch : compareCurrent}
+                      disabled={busy}
+                    >
+                      <Play size={13} fill="currentColor" />
+                      <span>{batch ? 'Rerun Comparison' : 'Run Comparison'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {batch ? (
+                  <>
+                    <div className="chart-wrap">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData}>
+                          <defs>
+                            <linearGradient id="etaFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#4ade80" stopOpacity={0.25} />
+                              <stop offset="100%" stopColor="#4ade80" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid stroke="#1e2c24" vertical={false} />
+                          <XAxis dataKey="label" tick={{ fill: '#94a3b8', fontSize: 13 }} axisLine={false} tickLine={false} />
+                          <YAxis tick={{ fill: '#94a3b8', fontSize: 13 }} axisLine={false} tickLine={false} unit="m" />
+                          <Tooltip
+                            contentStyle={{
+                              background: '#09110e',
+                              border: '1px solid #28382f',
+                              borderRadius: 10,
+                              color: '#f8fafc',
+                              fontSize: 13,
+                            }}
+                          />
+                          <Area type="monotone" dataKey="eta" stroke="#4ade80" strokeWidth={2.5} fill="url(#etaFill)" />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>SCENARIO</th>
+                            <th>AGENT</th>
+                            <th>ACTION & ROUTE</th>
+                            <th>EST. ARRIVAL</th>
+                            <th>DEADLINE</th>
+                            <th>STATUS</th>
+                            <th>WHY THIS CHOICE?</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {batch.records.map((r, i) => (
+                            <tr key={`${r.scenario_id}-${r.agent_id}-${i}`}>
+                              <td>
+                                <b>{r.scenario_name}</b>
+                              </td>
+                              <td>
+                                <span
+                                  className="agent-dot"
+                                  style={{
+                                    background: agents.find((a) => a.id === r.agent_id)?.color,
+                                  }}
+                                />
+                                <b>{r.agent_name}</b>
+                              </td>
+                              <td>{actionLabel(r)}</td>
+                              <td>
+                                <b>{r.eta_min ?? '—'} min</b>
+                              </td>
+                              <td>{r.deadline_min} min</td>
+                              <td>
+                                <span className={`table-status ${r.on_time ? 'good' : 'bad'}`}>
+                                  {r.on_time ? 'ON TIME' : 'LATE'}
+                                </span>
+                              </td>
+                              <td>
+                                <p className="plain-explanation table-explanation">
+                                  {r.plain_explanation || r.summary}
+                                </p>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty-comparison">
+                    <div className="pulse-orbit">
+                      <Layers3 size={24} />
+                    </div>
+                    <b>Ready to Compare All Autonomous Agents</b>
+                    <span>Click below to run and compare decisions across all architectures.</span>
+                    <button className="primary-btn" onClick={runBatch} disabled={busy}>
+                      <Play size={14} fill="currentColor" /> Run 3-Scenario Comparison Suite
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* VIEW: DIAGNOSTICS */}
+          {view === 'diagnostics' && (
+            <div className="card diagnostics-card">
+              <div className="card-title-row">
+                <div>
+                  <div className="section-kicker">
+                    <ShieldCheck size={15} />
+                    <span>APPLICATION VERIFICATION</span>
+                  </div>
+                  <h2>Simulation Testing Center</h2>
+                </div>
+                <div className="comparison-actions">
+                  <button
+                    className="text-btn"
+                    onClick={() => {
+                      if (!draft && activeScenario) setDraft(structuredClone(activeScenario));
+                      setView('input');
+                    }}
+                  >
+                    <SlidersHorizontal size={14} /> Enter Test Data
+                  </button>
+                  <button className="primary-btn compact" onClick={runDiagnostics} disabled={busy}>
+                    <Activity size={14} />
+                    <span>{busy ? 'Running Checks…' : 'Run Diagnostics'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <p className="architecture-summary">
+                Tests the core simulation engine across all 7 agents, scenario validation guards, learning memory stores,
+                and performance latency.
+              </p>
+
+              {diagnostics ? (
+                <>
+                  <div className="diagnostic-summary">
+                    <b>
+                      {diagnostics.passed}
+                      <small> / {diagnostics.total} checks passed</small>
+                    </b>
+                    <span>Total Latency: {diagnostics.duration_ms} ms</span>
+                  </div>
+                  <div className="diagnostic-list">
+                    {diagnostics.checks.map((c) => (
+                      <div className="diagnostic-row" key={c.name}>
+                        <span className={`diagnostic-mark ${c.passed ? 'pass' : 'fail'}`}>
+                          {c.passed ? <Check size={14} /> : <span>!</span>}
+                        </span>
+                        <div>
+                          <b>{c.name}</b>
+                          <small>{c.detail}</small>
+                        </div>
+                        <span className="diag-group">{c.group}</span>
+                        <time>{c.duration_ms} ms</time>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <div className="empty-comparison">
+                  <div className="pulse-orbit">
+                    <ShieldCheck size={24} />
+                  </div>
+                  <b>Verify System Integrity</b>
+                  <span>Runs 60+ automated checks directly against the Python engine.</span>
+                  <button className="primary-btn" onClick={runDiagnostics}>
+                    <Play size={14} fill="currentColor" /> Run Engine Checks
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Footer */}
+          <footer>
+            <span>
+              DISPATCH LAB <i>·</i> EXPLAINABLE AGENT SIMULATION WITH 3D WEBGL
+            </span>
+            <span>
+              <span className={`footer-dot ${connected ? '' : 'offline'}`} />
+              {connected ? 'Python FastAPI Engine Active' : 'Connecting to Python API'} <i>·</i> 7 Autonomous Agents
+            </span>
+          </footer>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function ArchitectureDiagram({
+  architecture,
+  currentStep,
+  trace,
+  agentColor,
+  large = false,
+}: {
+  architecture: Architecture | null;
+  currentStep: TraceStep | undefined;
+  trace: TraceStep[];
+  agentColor: string;
+  large?: boolean;
+}) {
+  if (!architecture) return <div className="diagram-placeholder">Loading architecture…</div>;
+  const width = Math.max(architecture.nodes.reduce((m, n) => Math.max(m, n.x + n.w), 0) + 35, 800);
+  const height = Math.max(
+    architecture.nodes.reduce((m, n) => Math.max(m, n.y + n.h), 0) + 30,
+    large ? 340 : 180
+  );
+  const activeIds = new Set(
+    trace.slice(0, trace.findIndex((t) => t === currentStep) + 1).map((t) => t.node_id)
+  );
+
+  return (
+    <div className={`diagram-scroll ${large ? 'large' : ''}`}>
+      <svg
+        className="architecture-svg"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`${architecture.title} architecture diagram`}
+      >
+        <defs>
+          <marker
+            id="arrow"
+            viewBox="0 0 10 10"
+            refX="8"
+            refY="5"
+            markerWidth="5"
+            markerHeight="5"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#53665d" />
+          </marker>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+        {architecture.edges.map((edge) => {
+          const a = architecture.nodes.find((n) => n.id === edge.source);
+          const b = architecture.nodes.find((n) => n.id === edge.target);
+          if (!a || !b) return null;
+          let x1 = a.x + a.w,
+            y1 = a.y + a.h / 2,
+            x2 = b.x,
+            y2 = b.y + b.h / 2;
+          if (b.x <= a.x) {
+            x1 = a.x + a.w / 2;
+            y1 = a.y + a.h;
+            x2 = b.x + b.w / 2;
+            y2 = b.y;
+          }
+          const isEdgeActive = activeIds.has(edge.source) && activeIds.has(edge.target);
+          return (
+            <g key={edge.id}>
+              <path
+                d={`M${x1} ${y1} C${(x1 + x2) / 2} ${y1}, ${(x1 + x2) / 2} ${y2}, ${x2} ${y2}`}
+                fill="none"
+                stroke={isEdgeActive ? agentColor : '#45564f'}
+                strokeWidth={isEdgeActive ? 2.2 : 1.4}
+                strokeDasharray={edge.dashed ? '4 4' : undefined}
+                markerEnd="url(#arrow)"
+                opacity={isEdgeActive ? 1 : 0.75}
+              />
+              {edge.label && (
+                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 5} textAnchor="middle" className="edge-label">
+                  {edge.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+        {architecture.nodes.map((n) => {
+          const active = currentStep?.node_id === n.id;
+          const visited = activeIds.has(n.id);
+          return (
+            <g
+              key={n.id}
+              className={`diagram-node ${active ? 'node-current' : ''} ${visited ? 'node-visited' : ''}`}
+            >
+              <rect
+                x={n.x}
+                y={n.y}
+                width={n.w}
+                height={n.h}
+                rx="10"
+                fill={active ? `${agentColor}35` : visited ? `${agentColor}18` : '#111d19'}
+                stroke={active ? agentColor : visited ? `${agentColor}80` : '#34453d'}
+                strokeWidth={active ? 2.5 : 1}
+                filter={active ? 'url(#glow)' : undefined}
+              />
+              <circle
+                cx={n.x + 17}
+                cy={n.y + n.h / 2}
+                r="4.5"
+                fill={active ? agentColor : visited ? `${agentColor}b0` : '#607168'}
+              />
+              <text x={n.x + 30} y={n.y + n.h / 2 - 2} className="node-title">
+                {n.label}
+              </text>
+              {n.detail && (
+                <text x={n.x + 30} y={n.y + n.h / 2 + 14} className="node-detail">
+                  {n.detail.length > 25 ? n.detail.slice(0, 25) + '…' : n.detail}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function Metric({
+  icon,
+  label,
+  value,
+  detail,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  detail: string;
+}) {
+  return (
+    <div className="card metric">
+      <div className="metric-top">
+        <span>{icon}</span>
+        <small>{label}</small>
       </div>
-    </main>
-  </div>;
+      <b>{value}</b>
+      <span>{detail}</span>
+    </div>
+  );
 }
 
-function ArchitectureDiagram({architecture,currentStep,trace,agentColor,large=false}:{architecture:Architecture|null,currentStep:TraceStep|undefined,trace:TraceStep[],agentColor:string,large?:boolean}){
-  if(!architecture)return <div className="diagram-placeholder">Loading architecture…</div>;
-  const width=Math.max(architecture.nodes.reduce((m,n)=>Math.max(m,n.x+n.w),0)+35,800),height=Math.max(architecture.nodes.reduce((m,n)=>Math.max(m,n.y+n.h),0)+30,large?320:180);
-  const activeIds=new Set(trace.slice(0,trace.findIndex(t=>t===currentStep)+1).map(t=>t.node_id));
-  return <div className={`diagram-scroll ${large?'large':''}`}><svg className="architecture-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${architecture.title} architecture diagram`}>
-    <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#53665d"/></marker><filter id="glow"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
-    {architecture.edges.map(edge=>{const a=architecture.nodes.find(n=>n.id===edge.source),b=architecture.nodes.find(n=>n.id===edge.target);if(!a||!b)return null;let x1=a.x+a.w,y1=a.y+a.h/2,x2=b.x,y2=b.y+b.h/2;if(b.x<=a.x){x1=a.x+a.w/2;y1=a.y+a.h;x2=b.x+b.w/2;y2=b.y;}return <g key={edge.id}><path d={`M${x1} ${y1} C${(x1+x2)/2} ${y1}, ${(x1+x2)/2} ${y2}, ${x2} ${y2}`} fill="none" stroke={activeIds.has(edge.source)&&activeIds.has(edge.target)?agentColor:'#45564f'} strokeWidth={activeIds.has(edge.source)&&activeIds.has(edge.target)?2:1.3} strokeDasharray={edge.dashed?'4 4':undefined} markerEnd="url(#arrow)" opacity={activeIds.has(edge.source)&&activeIds.has(edge.target)?1:.8}/>{edge.label&&<text x={(x1+x2)/2} y={(y1+y2)/2-5} textAnchor="middle" className="edge-label">{edge.label}</text>}</g>})}
-    {architecture.nodes.map(n=>{const active=currentStep?.node_id===n.id,visited=activeIds.has(n.id);return <g key={n.id} className={`diagram-node ${active?'node-current':''} ${visited?'node-visited':''}`}><rect x={n.x} y={n.y} width={n.w} height={n.h} rx="10" fill={active?`${agentColor}30`:visited?`${agentColor}13`:'#111d19'} stroke={active?agentColor:visited?`${agentColor}80`:'#34453d'} strokeWidth={active?2:1} filter={active?'url(#glow)':undefined}/><circle cx={n.x+17} cy={n.y+n.h/2} r="4" fill={active?agentColor:visited?`${agentColor}b0`:'#607168'}/><text x={n.x+30} y={n.y+n.h/2-2} className="node-title">{n.label}</text>{n.detail&&<text x={n.x+30} y={n.y+n.h/2+13} className="node-detail">{n.detail.length>24?n.detail.slice(0,24)+'…':n.detail}</text>}</g>})}
-    {currentStep&&<circle r="4" fill={agentColor} filter="url(#glow)"><animateMotion dur=".55s" fill="freeze" path={(()=>{const n=architecture.nodes.find(x=>x.id===currentStep.node_id);return n?`M${n.x-16} ${n.y+n.h/2} L${n.x+10} ${n.y+n.h/2}`:'M0 0 L0 0'})()}/></circle>}
-  </svg></div>
-}
-
-function Metric({icon,label,value,detail}:{icon:React.ReactNode,label:string,value:string|number,detail:string}){return <div className="card metric"><div className="metric-top"><span>{icon}</span><small>{label}</small></div><b>{value}</b><span>{detail}</span></div>}
-function actionLabel(result:AgentDecision){if(!result.selected_route_id)return 'No route available';return `Deliver via Route ${result.selected_route_id}${result.action.endsWith('_late')?' (delay warning)':''}`}
-function ScenarioEditor({scenario,onChange,onSave,onRun,onCompare}:{scenario:Scenario,onChange:(s:Scenario)=>void,onSave:()=>void,onRun:()=>void,onCompare:()=>void}){
-  const updateRoute=(index:number,patch:Partial<Scenario['routes'][number]>)=>onChange({...scenario,routes:scenario.routes.map((route,i)=>i===index?{...route,...patch}:route)});
-  const addRoute=()=>{const id=['A','B','C','D','E'].find(candidate=>!scenario.routes.some(route=>route.id===candidate));if(!id)return;onChange({...scenario,routes:[...scenario.routes,{id,name:`Route ${id}`,distance_km:4,travel_time_min:18,traffic_level:'light',cost:100,available:true}]})};
-  return <div className="editor-overlay embedded"><div className="editor-modal"><div className="card-title-row"><div><div className="section-kicker"><SlidersHorizontal size={13}/> SCENARIO INPUTS</div><h2>Enter delivery conditions</h2></div></div><p className="architecture-summary">Python validates and simulates these values. No live traffic feed is assumed.</p>
-    <div className="editor-fields"><label>Scenario name<input value={scenario.name} onChange={e=>onChange({...scenario,name:e.target.value})}/></label><label>Deadline (minutes)<input min="1" type="number" value={scenario.deadline_min} onChange={e=>onChange({...scenario,deadline_min:+e.target.value})}/></label><label>Weather<select value={scenario.weather} onChange={e=>onChange({...scenario,weather:e.target.value as Scenario['weather']})}><option value="clear">Clear</option><option value="rain">Rain</option></select></label><label>Order priority<select value={scenario.priority} onChange={e=>onChange({...scenario,priority:e.target.value as Scenario['priority']})}><option value="normal">Normal</option><option value="urgent">Urgent</option></select></label></div>
-    <div className="routes-editor-heading"><b>ROUTE INPUTS</b><button className="text-btn" disabled={scenario.routes.length>=5} onClick={addRoute}><Plus size={13}/> Add route</button></div><div className="editor-routes">{scenario.routes.map((r,i)=><div key={r.id}><b>Route {r.id}</b><label>Distance km<input min="0.1" step="0.1" type="number" value={r.distance_km} onChange={e=>updateRoute(i,{distance_km:+e.target.value})}/></label><label>ETA min<input min="0.1" type="number" value={r.travel_time_min} onChange={e=>updateRoute(i,{travel_time_min:+e.target.value})}/></label><label>Cost Rs.<input min="0" type="number" value={r.cost} onChange={e=>updateRoute(i,{cost:+e.target.value})}/></label><label>Traffic<select value={r.traffic_level} onChange={e=>updateRoute(i,{traffic_level:e.target.value as typeof r.traffic_level})}><option value="light">Light</option><option value="moderate">Moderate</option><option value="heavy">Heavy</option></select></label><label className="availability"><input type="checkbox" checked={r.available} onChange={e=>updateRoute(i,{available:e.target.checked})}/> Available</label><button className="remove-route" title="Remove route" disabled={scenario.routes.length<=1} onClick={()=>onChange({...scenario,routes:scenario.routes.filter((_,j)=>j!==i)})}><Trash2 size={13}/></button></div>)}</div>
-    <div className="editor-actions"><button className="text-btn" onClick={onSave}><Check size={14}/> Save scenario</button><button className="text-btn" onClick={onRun}><Play size={13} fill="currentColor"/> Run this agent</button><button className="primary-btn" onClick={onCompare}><Layers3 size={14}/> Compare all agents</button></div></div></div>
+function actionLabel(result: AgentDecision) {
+  if (!result.selected_route_id) return 'No feasible route';
+  return `Deliver via Route ${result.selected_route_id}${result.action.endsWith('_late') ? ' (delay risk)' : ''}`;
 }
 
 export default App;
