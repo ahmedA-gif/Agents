@@ -13,6 +13,7 @@ import {
   Compass,
   Database,
   Eye,
+  FastForward,
   Gauge,
   GitBranch,
   HelpCircle,
@@ -87,8 +88,8 @@ function App() {
   const [draft, setDraft] = useState<Scenario | null>(null);
   const [compareScope, setCompareScope] = useState<'current' | 'suite'>('current');
 
-  // 3D Visualizer & Playback States
-  const [visualizerMode, setVisualizerMode] = useState<'city' | 'brain' | 'diagram'>('city');
+  // Real-time animation triggers & controls
+  const [autoPlayTrigger, setAutoPlayTrigger] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const playTimerRef = useRef<number | null>(null);
@@ -97,13 +98,6 @@ function App() {
   const activeScenario = scenarios.find((s) => s.id === scenarioId) ?? scenarios[0] ?? null;
   const liveTrace = decision?.reasoning ?? [];
   const currentStep = liveTrace[Math.min(step, Math.max(0, liveTrace.length - 1))];
-
-  // Calculate 0..100 progress for 3D vehicle along route
-  const progressPercent = useMemo(() => {
-    if (!decision) return 0;
-    if (liveTrace.length <= 1) return 100;
-    return Math.round((Math.min(step, liveTrace.length - 1) / (liveTrace.length - 1)) * 100);
-  }, [step, liveTrace.length, decision]);
 
   const chartData = useMemo(
     () =>
@@ -156,24 +150,24 @@ function App() {
     setIsPlaying(false);
   }, [agentId]);
 
-  // Auto-run single agent when active scenario or agent is initially loaded
+  // Initial simulation run on load
   useEffect(() => {
     if (activeScenario && !decision && connected) {
       runOne();
     }
   }, [activeScenario?.id, connected]);
 
-  // Automated playback timer
+  // Automated step-by-step playback timer
   useEffect(() => {
     if (isPlaying) {
-      const intervalMs = Math.round(1100 / playbackSpeed);
+      const intervalMs = Math.round(1000 / playbackSpeed);
       playTimerRef.current = window.setInterval(() => {
         setStep((prev) => {
           if (prev >= liveTrace.length - 1) {
             setIsPlaying(false);
             if (decision?.on_time) {
               try {
-                confetti({ particleCount: 35, spread: 60, origin: { y: 0.7 } });
+                confetti({ particleCount: 40, spread: 65, origin: { y: 0.7 } });
               } catch (_) {}
             }
             return prev;
@@ -204,6 +198,7 @@ function App() {
     }
   };
 
+  // Run single agent simulation (Faster approach with instant real-time execution)
   async function runOne() {
     setBusy(true);
     setError('');
@@ -212,11 +207,15 @@ function App() {
       const r = await api.simulateAgent(agentId, scenarioId);
       setDecision(r);
       setStep(0);
+      setAutoPlayTrigger((prev) => prev + 1); // trigger live 3D animation immediately!
+      setIsPlaying(true); // start live step-by-step trace traversal in sync!
+
       api
         .learningMemory()
         .then(setMemory)
         .catch(() => {});
-      // Also silently fetch all agents for this scenario to populate behavior matrix
+
+      // Prefetch all agents on this scenario for behavior matrix
       api
         .simulateAll(scenarioId)
         .then((all) => setCurrentScenarioDecisions(all.results))
@@ -328,6 +327,7 @@ function App() {
       });
       setDecision(result);
       setStep(0);
+      setAutoPlayTrigger((prev) => prev + 1);
       setView('overview');
       api
         .learningMemory()
@@ -436,6 +436,7 @@ function App() {
               onClick={() => {
                 setAgentId(a.id);
                 setDecision(null);
+                runOne();
               }}
               key={a.id}
             >
@@ -536,7 +537,7 @@ function App() {
               </p>
             </div>
             <div className="header-badge-chip">
-              <span className="date-dot" /> 3D VISUALIZATION ACTIVE
+              <span className="date-dot" /> 3D CITY & ARCHITECTURE LIVE
             </div>
           </div>
 
@@ -586,6 +587,8 @@ function App() {
                     setDecision(null);
                     const found = scenarios.find((s) => s.id === t.id);
                     if (found) setDraft(structuredClone(found));
+                    // Run simulation on selection immediately
+                    runOne();
                   }}
                 >
                   <span className="pill-number">{t.num}</span>
@@ -711,72 +714,29 @@ function App() {
                   <div className="stage-header">
                     <div className="stage-title-wrap">
                       <Sparkles size={16} style={{ color: activeAgent.color }} />
-                      <h3>3D Real-Time Agent Simulation Canvas</h3>
+                      <h3>3D Real-Time Animated Delivery Simulation</h3>
                     </div>
-
-                    <div className="stage-mode-switcher">
-                      <button
-                        className={`mode-btn ${visualizerMode === 'city' ? 'active' : ''}`}
-                        onClick={() => setVisualizerMode('city')}
-                      >
-                        <Truck size={14} />
-                        <span>3D Delivery City</span>
-                      </button>
-                      <button
-                        className={`mode-btn ${visualizerMode === 'brain' ? 'active' : ''}`}
-                        onClick={() => setVisualizerMode('brain')}
-                      >
-                        <Brain size={14} />
-                        <span>3D Neural Brain</span>
-                      </button>
-                      <button
-                        className={`mode-btn ${visualizerMode === 'diagram' ? 'active' : ''}`}
-                        onClick={() => setVisualizerMode('diagram')}
-                      >
-                        <GitBranch size={14} />
-                        <span>2D Architecture</span>
-                      </button>
-                    </div>
+                    <span className="stage-agent-indicator" style={{ color: activeAgent.color }}>
+                      Architecture: <b>{activeAgent.name}</b>
+                    </span>
                   </div>
 
                   {/* Canvas Render Area */}
                   <div className="stage-viewport">
-                    {visualizerMode === 'city' && (
-                      <CityScene3D
-                        scenario={activeScenario}
-                        selectedRouteId={decision?.selected_route_id ?? null}
-                        agentColor={activeAgent.color}
-                        agentName={activeAgent.name}
-                        progressPercent={progressPercent}
-                        isPlaying={isPlaying}
-                        onTogglePlay={togglePlay}
-                        etaMin={decision?.eta_min}
-                        deadlineMin={decision?.deadline_min ?? activeScenario?.deadline_min}
-                        onTime={decision?.on_time}
-                      />
-                    )}
-
-                    {visualizerMode === 'brain' && (
-                      <AgentBrain3D
-                        architecture={architecture}
-                        currentStep={currentStep}
-                        trace={liveTrace}
-                        agentColor={activeAgent.color}
-                        agentName={activeAgent.name}
-                      />
-                    )}
-
-                    {visualizerMode === 'diagram' && (
-                      <div className="diagram-embed-wrap">
-                        <ArchitectureDiagram
-                          architecture={architecture}
-                          currentStep={currentStep}
-                          trace={liveTrace}
-                          agentColor={activeAgent.color}
-                          large
-                        />
-                      </div>
-                    )}
+                    <CityScene3D
+                      scenario={activeScenario}
+                      selectedRouteId={decision?.selected_route_id ?? null}
+                      agentId={agentId}
+                      agentColor={activeAgent.color}
+                      agentName={activeAgent.name}
+                      currentStepIndex={step}
+                      totalSteps={liveTrace.length}
+                      onStepChange={setStep}
+                      etaMin={decision?.eta_min}
+                      deadlineMin={decision?.deadline_min ?? activeScenario?.deadline_min}
+                      onTime={decision?.on_time}
+                      autoPlayTrigger={autoPlayTrigger}
+                    />
                   </div>
                 </div>
 
@@ -852,6 +812,77 @@ function App() {
                     </div>
                   )}
                 </div>
+              </section>
+
+              {/* LIVE AGENT ARCHITECTURE DIAGRAM SECTION (Prominently Restored & Synced) */}
+              <section className="card architecture-overview-card">
+                <div className="card-title-row">
+                  <div>
+                    <div className="section-kicker">
+                      <GitBranch size={15} />
+                      <span>LIVE AGENT ARCHITECTURE DIAGRAM</span>
+                    </div>
+                    <h2>{architecture?.title ?? activeAgent.name} Cognitive Structure</h2>
+                  </div>
+                  <div className="diagram-top-badges">
+                    <span className="diagram-step-pill" style={{ background: `${activeAgent.color}25`, color: activeAgent.color }}>
+                      {currentStep ? `Active Node: ${currentStep.label}` : 'Ready'}
+                    </span>
+                    <button className="subtle-btn" onClick={() => setView('architectures')}>
+                      Expand Details <ArrowRight size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                <p className="architecture-summary">{architecture?.summary ?? activeAgent.description}</p>
+
+                {/* The 2D Architecture SVG with active node glow and step progression */}
+                <div className="architecture-diagram-container">
+                  <ArchitectureDiagram
+                    architecture={architecture}
+                    currentStep={currentStep}
+                    trace={liveTrace}
+                    agentColor={activeAgent.color}
+                    large
+                  />
+                </div>
+
+                {/* Progress Bar & Step-forward controls */}
+                <div className="trace-footer">
+                  <div className="trace-progress">
+                    <span>{liveTrace.length ? String(Math.min(step + 1, liveTrace.length)).padStart(2, '0') : '00'}</span>
+                    <i>
+                      <b
+                        style={{
+                          width: liveTrace.length
+                            ? `${(Math.min(step + 1, liveTrace.length) / liveTrace.length) * 100}%`
+                            : '0%',
+                          background: activeAgent.color,
+                        }}
+                      />
+                    </i>
+                    <span>{String(liveTrace.length).padStart(2, '0')} REASONING NODES</span>
+                  </div>
+
+                  <div className="trace-step-actions">
+                    <button
+                      className="step-btn"
+                      disabled={!liveTrace.length}
+                      onClick={() => (step < liveTrace.length - 1 ? setStep(step + 1) : togglePlay())}
+                    >
+                      <Play size={12} fill="currentColor" />
+                      <span>{step < liveTrace.length - 1 ? 'Step Next Node' : 'Replay Trace'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {currentStep && (
+                  <div className="active-event">
+                    <span style={{ background: activeAgent.color }} />
+                    <b>{currentStep.label}:</b>
+                    <span>{currentStep.detail}</span>
+                  </div>
+                )}
               </section>
 
               {/* Explainable Journey: Step-by-Step Reasoner & Route Elimination */}
@@ -976,7 +1007,7 @@ function App() {
                 <div className="dual-column">
                   <div className="dual-header">
                     <GitBranch size={16} />
-                    <b>2D Flow Diagram</b>
+                    <b>2D Flow Architecture Diagram</b>
                   </div>
                   <ArchitectureDiagram
                     architecture={architecture}

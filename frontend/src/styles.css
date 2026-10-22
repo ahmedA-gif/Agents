@@ -1024,10 +1024,10 @@ button {
   box-shadow: 0 0 10px rgba(74, 222, 128, 0.4);
 }
 
-.playback-actions {
+.playback-actions, .speed-action-controls {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .hud-play-btn {
@@ -1047,12 +1047,88 @@ button {
   background: #86efac;
 }
 
+.hud-play-btn.replay {
+  background: #142a1f;
+  border: 1px solid #284736;
+  color: #a7f3d0;
+}
+
+.hud-play-btn.replay:hover {
+  background: #1d3d2e;
+  color: #fff;
+}
+
+.sim-speed-selector {
+  display: flex;
+  background: #08130e;
+  border: 1px solid #1c3227;
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.speed-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 600 11px var(--mono);
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.speed-btn:hover {
+  color: #fff;
+}
+
+.speed-btn.active {
+  background: #183325;
+  color: var(--accent);
+}
+
 .hud-drag-tip {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* Architecture Overview Card */
+.architecture-overview-card {
+  background: #0c1813;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.diagram-top-badges {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.diagram-step-pill {
+  font: 700 12px var(--mono);
+  padding: 4px 10px;
+  border-radius: 6px;
+  letter-spacing: 0.5px;
+}
+
+.architecture-diagram-container {
+  background: #07120d;
+  border: 1px solid #1a2f23;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.trace-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* 3D Agent Brain Styles */
